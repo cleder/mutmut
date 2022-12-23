@@ -4,3 +4,4 @@ hammett
 mock>=2.0.0
 coverage
 whatthepatch==0.0.6
+wheel>=0.38.0 # not directly required, pinned by Snyk to avoid a vulnerability
