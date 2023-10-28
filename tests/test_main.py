@@ -139,7 +139,7 @@ def test_compute_return_code():
     class MockProgress(Progress):
         def __init__(self, killed_mutants, surviving_mutants,
                      surviving_mutants_timeout, suspicious_mutants, **_):
-            super(MockProgress, self).__init__(total=0, output_legend={})
+            super(MockProgress, self).__init__(total=0, output_legend={}, no_progress=False)
             self.killed_mutants = killed_mutants
             self.surviving_mutants = surviving_mutants
             self.surviving_mutants_timeout = surviving_mutants_timeout
@@ -180,6 +180,11 @@ def test_compute_return_code():
     assert compute_exit_code(MockProgress(1, 1, 0, 1), Exception()) == 11
     assert compute_exit_code(MockProgress(1, 1, 1, 0), Exception()) == 7
     assert compute_exit_code(MockProgress(1, 1, 1, 1), Exception()) == 15
+
+    assert compute_exit_code(MockProgress(0, 0, 0, 0), ci=True) == 0
+    assert compute_exit_code(MockProgress(1, 1, 1, 1), ci=True) == 0
+    assert compute_exit_code(MockProgress(0, 0, 0, 0), Exception(), ci=True) == 1
+    assert compute_exit_code(MockProgress(1, 1, 1, 1), Exception(), ci=True) == 1
 
 
 def test_read_coverage_data(filesystem):

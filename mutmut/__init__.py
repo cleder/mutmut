@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+from __future__ import annotations
+
 import fnmatch
 import itertools
 import multiprocessing
@@ -10,6 +12,7 @@ import sys
 import toml
 from configparser import ConfigParser
 from copy import copy as copy_obj
+from dataclasses import dataclass, field
 from functools import wraps
 from io import (
     open,
@@ -25,11 +28,12 @@ from threading import (
     Thread,
 )
 from time import time
+from typing import Callable, Dict, Iterator, List, Optional, Set, Tuple
 
 from parso import parse
-from parso.python.tree import Name, Number, Keyword
+from parso.python.tree import Name, Number, Keyword, FStringStart, FStringEnd
 
-__version__ = '2.4.1'
+__version__ = '2.4.3'
 
 
 if os.getcwd() not in sys.path:
@@ -40,21 +44,12 @@ except ImportError:
     mutmut_config = None
 
 
-class RelativeMutationID(object):
-    def __init__(self, line, index, line_number, filename=None):
-        self.line = line
-        self.index = index
-        self.line_number = line_number
-        self.filename = filename
-
-    def __repr__(self):
-        return 'MutationID(line="{}", index={}, line_number={}, filename={})'.format(self.line, self.index, self.line_number, self.filename)
-
-    def __eq__(self, other):
-        return (self.line, self.index, self.line_number) == (other.line, other.index, other.line_number)
-
-    def __hash__(self):
-        return hash((self.line, self.index, self.line_number))
+@dataclass(frozen=True)
+class RelativeMutationID:
+    line: str
+    index: int
+    line_number: int
+    filename: Optional[str] = field(default=None, compare=False, hash=False)
 
 
 ALL = RelativeMutationID(filename='%all%', line='%all%', index=-1, line_number=-1)
@@ -64,7 +59,7 @@ class InvalidASTPatternException(Exception):
     pass
 
 
-class ASTPattern(object):
+class ASTPattern:
     def __init__(self, source, **definitions):
         if definitions is None:
             definitions = {}
@@ -251,6 +246,23 @@ def string_mutation(value, **_):
     return prefix + value[0] + 'XX' + value[1:-1] + 'XX' + value[-1]
 
 
+def fstring_mutation(children, **_):
+    fstring_start: FStringStart = children[0]
+    fstring_end: FStringEnd = children[-1]
+
+    children = children[:]  # we need to copy the list here, to not get in place mutation on the next line!
+
+    children[0] = FStringStart(fstring_start.value + 'XX',
+                               start_pos=fstring_start.start_pos,
+                               prefix=fstring_start.prefix)
+
+    children[-1] = FStringEnd('XX' + fstring_end.value,
+                              start_pos=fstring_end.start_pos,
+                              prefix=fstring_end.prefix)
+
+    return children
+
+
 def partition_node_list(nodes, value):
     for i, n in enumerate(nodes):
         if hasattr(n, 'value') and n.value == value:
@@ -271,12 +283,10 @@ def lambda_mutation(children, **_):
 NEWLINE = {'formatting': [], 'indent': '', 'type': 'endl', 'value': ''}
 
 
-def argument_mutation(children, context, **_):
+def argument_mutation(children, context: Context, **_):
     """Mutate the arguments one by one from dict(a=b) to dict(aXXX=b).
 
     This is similar to the mutation of dict literals in the form {'a': b}.
-
-    :type context: Context
     """
     if len(context.stack) >= 3 and context.stack[-3].type in ('power', 'atom_expr'):
         stack_pos_of_power_node = -3
@@ -444,6 +454,7 @@ mutations_by_type = {
     'number': dict(value=number_mutation),
     'name': dict(value=name_mutation),
     'string': dict(value=string_mutation),
+    'fstring': dict(children=fstring_mutation),
     'argument': dict(children=argument_mutation),
     'or_test': dict(children=and_or_test_mutation),
     'and_test': dict(children=and_or_test_mutation),
@@ -456,7 +467,7 @@ mutations_by_type = {
 # TODO: detect regexes and mutate them in nasty ways? Maybe mutate all strings as if they are regexes
 
 
-def should_exclude(context, config):
+def should_exclude(context, config: Optional[Config]):
     if config is None or config.covered_lines_by_filename is None:
         return False
 
@@ -477,8 +488,16 @@ def should_exclude(context, config):
     return False
 
 
-class Context(object):
-    def __init__(self, source=None, mutation_id=ALL, dict_synonyms=None, filename=None, config=None, index=0):
+class Context:
+    def __init__(
+        self,
+        source: Optional[str] = None,
+        mutation_id=ALL,
+        dict_synonyms=None,
+        filename=None,
+        config: Optional[Config] = None,
+        index=0,
+    ):
         self.index = index
         self.remove_newline_at_end = False
         self._source = None
@@ -544,11 +563,9 @@ class Context(object):
         return self.mutation_id in (ALL, self.mutation_id_of_current_index)
 
 
-def mutate(context):
+def mutate(context: Context) -> Tuple[str, int]:
     """
-    :type context: Context
     :return: tuple of mutated source code and number of mutations performed
-    :rtype: Tuple[str, int]
     """
     try:
         result = parse(context.source, error_recovery=False)
@@ -572,10 +589,7 @@ def mutate(context):
     return mutated_source, len(context.performed_mutation_ids)
 
 
-def mutate_node(node, context):
-    """
-    :type context: Context
-    """
+def mutate_node(node, context: Context):
     context.stack.append(node)
     try:
         if node.type in ('tfpdef', 'import_from', 'import_name'):
@@ -647,10 +661,7 @@ def mutate_node(node, context):
         context.stack.pop()
 
 
-def mutate_list_of_nodes(node, context):
-    """
-    :type context: Context
-    """
+def mutate_list_of_nodes(node, context: Context):
     return_annotation_started = False
 
     for child_node in node.children:
@@ -670,22 +681,13 @@ def mutate_list_of_nodes(node, context):
             return
 
 
-def list_mutations(context):
-    """
-    :type context: Context
-    """
+def list_mutations(context: Context):
     assert context.mutation_id == ALL
     mutate(context)
     return context.performed_mutation_ids
 
 
-def mutate_file(backup, context):
-    """
-    :type backup: bool
-    :type context: Context
-
-    :return: Tuple[str, str]
-    """
+def mutate_file(backup: bool, context: Context) -> Tuple[str, str]:
     with open(context.filename) as f:
         original = f.read()
     if backup:
@@ -697,7 +699,13 @@ def mutate_file(backup, context):
     return original, mutated
 
 
-def queue_mutants(*, progress, config, mutants_queue, mutations_by_file):
+def queue_mutants(
+    *,
+    progress: Progress,
+    config: Config,
+    mutants_queue,
+    mutations_by_file: Dict[str, List[RelativeMutationID]],
+):
     from mutmut.cache import get_cached_mutation_statuses
 
     try:
@@ -792,7 +800,9 @@ def run_mutation(context: Context, callback) -> str:
             return BAD_TIMEOUT
 
         time_elapsed = time() - start
-        if not survived and time_elapsed > config.test_time_base + (config.baseline_time_elapsed * config.test_time_multipler):
+        if not survived and time_elapsed > config.test_time_base + (
+            config.baseline_time_elapsed * config.test_time_multiplier
+        ):
             return OK_SUSPICIOUS
 
         if survived:
@@ -812,30 +822,31 @@ def run_mutation(context: Context, callback) -> str:
                 callback(result)
 
 
-class Config(object):
-    def __init__(self, swallow_output, test_command, covered_lines_by_filename,
-                 baseline_time_elapsed, test_time_multiplier, test_time_base,
-                 dict_synonyms, total, using_testmon,
-                 tests_dirs, hash_of_tests, pre_mutation, post_mutation,
-                 coverage_data, paths_to_mutate, mutation_types_to_apply, no_progress, rerun_all):
-        self.swallow_output = swallow_output
-        self.test_command = self._default_test_command = test_command
-        self.covered_lines_by_filename = covered_lines_by_filename
-        self.baseline_time_elapsed = baseline_time_elapsed
-        self.test_time_multipler = test_time_multiplier
-        self.test_time_base = test_time_base
-        self.dict_synonyms = dict_synonyms
-        self.total = total
-        self.using_testmon = using_testmon
-        self.tests_dirs = tests_dirs
-        self.hash_of_tests = hash_of_tests
-        self.post_mutation = post_mutation
-        self.pre_mutation = pre_mutation
-        self.coverage_data = coverage_data
-        self.paths_to_mutate = paths_to_mutate
-        self.mutation_types_to_apply = mutation_types_to_apply
-        self.no_progress = no_progress
-        self.rerun_all = rerun_all
+@dataclass
+class Config:
+    swallow_output: bool
+    test_command: str
+    _default_test_command: str = field(init=False)
+    covered_lines_by_filename: Optional[Dict[str, set[Optional[int]]]]
+    baseline_time_elapsed: float
+    test_time_multiplier: float
+    test_time_base: float
+    dict_synonyms: List[str]
+    total: int
+    using_testmon: bool
+    tests_dirs: List[str]
+    hash_of_tests: str
+    post_mutation: str
+    pre_mutation: str
+    coverage_data: Dict[str, Dict[int, List[str]]]
+    paths_to_mutate: List[str]
+    mutation_types_to_apply: Set[str]
+    no_progress: bool
+    ci: bool
+    rerun_all: bool
+
+    def __post_init__(self):
+        self._default_test_command = self.test_command
 
 
 def tests_pass(config: Config, callback) -> bool:
@@ -904,11 +915,9 @@ def status_printer():
     return p
 
 
-def guess_paths_to_mutate():
-    """Guess the path to source code to mutate
 
-    :rtype: str
-    """
+def guess_paths_to_mutate() -> str:
+    """Guess the path to source code to mutate"""
     this_dir = os.getcwd().split(os.sep)[-1]
     if isdir('lib'):
         return 'lib'
@@ -931,7 +940,7 @@ def guess_paths_to_mutate():
         'section.')
 
 
-class Progress(object):
+class Progress:
     def __init__(self, total, output_legend, no_progress=False):
         self.total = total
         self.output_legend = output_legend
@@ -990,24 +999,18 @@ def get_mutations_by_file_from_cache(mutation_pk):
     return {filename: [mutation_id]}
 
 
-def popen_streaming_output(cmd, callback, timeout=None):
+def popen_streaming_output(
+    cmd: str, callback: Callable[[str], None], timeout: Optional[float] = None
+) -> int:
     """Open a subprocess and stream its output without hard-blocking.
 
     :param cmd: the command to execute within the subprocess
-    :type cmd: str
-
     :param callback: function that intakes the subprocess' stdout line by line.
         It is called for each line received from the subprocess' stdout stream.
-    :type callback: Callable[[Context], bool]
-
     :param timeout: the timeout time of the subprocess
-    :type timeout: float
-
     :raises TimeoutError: if the subprocess' execution time exceeds
         the timeout time
-
     :return: the return code of the executed subprocess
-    :rtype: int
     """
     if os.name == 'nt':  # pragma: no cover
         process = subprocess.Popen(
@@ -1036,7 +1039,7 @@ def popen_streaming_output(cmd, callback, timeout=None):
 
     # python 2-3 agnostic process timer
     timer = Timer(timeout, kill, [process])
-    timer.setDaemon(True)
+    timer.daemon = True
     timer.start()
 
     while process.returncode is None:
@@ -1069,7 +1072,7 @@ def popen_streaming_output(cmd, callback, timeout=None):
     return process.returncode
 
 
-def hammett_tests_pass(config, callback):
+def hammett_tests_pass(config: Config, callback) -> bool:
     # noinspection PyUnresolvedReferences
     from hammett import main_cli
     modules_before = set(sys.modules.keys())
@@ -1122,13 +1125,14 @@ def hammett_tests_pass(config, callback):
 
     return returncode == 0
 
+CYCLE_PROCESS_AFTER = 100
 
-def run_mutation_tests(config, progress, mutations_by_file):
-    """
-    :type config: Config
-    :type progress: Progress
-    :type mutations_by_file: dict[str, list[RelativeMutationID]]
-    """
+
+def run_mutation_tests(
+    config: Config,
+    progress: Progress,
+    mutations_by_file: Dict[str, List[RelativeMutationID]],
+):
     from mutmut.cache import update_mutant_status
 
     # Need to explicitly use the spawn method for python < 3.8 on macOS
@@ -1160,7 +1164,7 @@ def run_mutation_tests(config, progress, mutations_by_file):
             kwargs=dict(
                 mutants_queue=mutants_queue,
                 results_queue=results_queue,
-                cycle_process_after=100,
+                cycle_process_after=CYCLE_PROCESS_AFTER,
             )
         )
         t.start()
@@ -1168,7 +1172,7 @@ def run_mutation_tests(config, progress, mutations_by_file):
 
     t = create_worker()
 
-    while t.is_alive():
+    while True:
         command, status, filename, mutation_id = results_queue.get()
         if command == 'end':
             t.join()
@@ -1191,10 +1195,9 @@ def run_mutation_tests(config, progress, mutations_by_file):
             update_mutant_status(file_to_mutate=filename, mutation_id=mutation_id, status=status, tests_hash=config.hash_of_tests)
 
 
-def read_coverage_data():
+def read_coverage_data() -> Dict[str, Dict[int, List[str]]]:
     """
     Reads the coverage database and returns a dictionary which maps the filenames to the covered lines and their contexts.
-    :rtype: dict[str, dict[int, list[str]]]
     """
     try:
         # noinspection PyPackageRequirements,PyUnresolvedReferences
@@ -1207,7 +1210,7 @@ def read_coverage_data():
     return {filepath: data.contexts_by_lineno(filepath) for filepath in data.measured_files()}
 
 
-def read_patch_data(patch_file_path):
+def read_patch_data(patch_file_path: str):
     try:
         # noinspection PyPackageRequirements
         import whatthepatch
@@ -1218,16 +1221,16 @@ def read_patch_data(patch_file_path):
 
     return {
         diff.header.new_path: {change.new for change in diff.changes if change.old is None}
-        for diff in diffs
+        for diff in diffs if diff.changes
     }
 
 
-def add_mutations_by_file(mutations_by_file, filename, dict_synonyms, config):
-    """
-    :type mutations_by_file: dict[str, list[RelativeMutationID]]
-    :type filename: str
-    :type dict_synonyms: list[str]
-    """
+def add_mutations_by_file(
+    mutations_by_file: Dict[str, List[RelativeMutationID]],
+    filename: str,
+    dict_synonyms: List[str],
+    config: Optional[Config],
+):
     with open(filename) as f:
         source = f.read()
     context = Context(
@@ -1240,27 +1243,28 @@ def add_mutations_by_file(mutations_by_file, filename, dict_synonyms, config):
     try:
         mutations_by_file[filename] = list_mutations(context)
         from mutmut.cache import register_mutants
+
         register_mutants(mutations_by_file)
     except Exception as e:
-        raise RuntimeError('Failed while creating mutations for {}, for line "{}"'.format(context.filename, context.current_source_line)) from e
+        raise RuntimeError(
+            'Failed while creating mutations for {}, for line "{}"'.format(
+                context.filename, context.current_source_line
+            )
+        ) from e
 
 
-def python_source_files(path, tests_dirs, paths_to_exclude=None):
+def python_source_files(
+    path: str, tests_dirs: List[str], paths_to_exclude: Optional[List[str]] = None
+) -> Iterator[str]:
     """Attempt to guess where the python source files to mutate are and yield
     their paths
 
     :param path: path to a python source file or package directory
-    :type path: str
-
     :param tests_dirs: list of directory paths containing test files
         (we do not want to mutate these!)
-    :type tests_dirs: list[str]
-
     :param paths_to_exclude: list of UNIX filename patterns to exclude
-    :type paths_to_exclude: list[str]
 
     :return: generator listing the paths to the python source files to mutate
-    :rtype: Generator[str, None, None]
     """
     paths_to_exclude = paths_to_exclude or []
     if isdir(path):
@@ -1277,7 +1281,9 @@ def python_source_files(path, tests_dirs, paths_to_exclude=None):
         yield path
 
 
-def compute_exit_code(progress, exception=None):
+def compute_exit_code(
+    progress: Progress, exception: Optional[Exception] = None, ci: bool = False
+) -> int:
     """Compute an exit code for mutmut mutation testing
 
     The following exit codes are available for mutmut:
@@ -1290,17 +1296,20 @@ def compute_exit_code(progress, exception=None):
      Exit codes 1 to 8 will be bit-ORed so that it is possible to know what
      different mutant statuses occurred during mutation testing.
 
+     When running with ci=True (--CI flag enabled), the exit code will always be
+     1 for a fatal error or 0 for any other case.
+
     :param exception:
-    :type exception: Exception
     :param progress:
-    :type progress: Progress
+    :param ci:
 
     :return: integer noting the exit code of the mutation tests.
-    :rtype: int
     """
     code = 0
     if exception is not None:
         code = code | 1
+    if ci:
+        return code
     if progress.surviving_mutants > 0:
         code = code | 2
     if progress.surviving_mutants_timeout > 0:

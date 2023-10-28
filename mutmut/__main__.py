@@ -11,6 +11,7 @@ from os.path import exists
 from pathlib import Path
 from shutil import copy
 from time import time
+from typing import List
 
 import click
 from glob2 import glob
@@ -47,18 +48,13 @@ from mutmut.cache import print_result_cache, print_result_ids_cache, \
     update_line_numbers, print_result_cache_junitxml, get_unified_diff
 
 
-def do_apply(mutation_pk, dict_synonyms, backup):
+def do_apply(mutation_pk: str, dict_synonyms: List[str], backup: bool):
     """Apply a specified mutant to the source code
 
     :param mutation_pk: mutmut cache primary key of the mutant to apply
-    :type mutation_pk: str
-
     :param dict_synonyms: list of synonym keywords for a python dictionary
-    :type dict_synonyms: list[str]
-
     :param backup: if :obj:`True` create a backup of the source file
         before applying the mutation
-    :type backup: bool
     """
     filename, mutation_id = filename_and_mutation_id_from_pk(int(mutation_pk))
 
@@ -116,6 +112,7 @@ def version():
 @click.option('--post-mutation')
 @click.option('--simple-output', is_flag=True, default=False, help="Swap emojis in mutmut output to plain text alternatives.")
 @click.option('--no-progress', is_flag=True, default=False, help="Disable real-time progress indicator")
+@click.option('--CI', is_flag=True, default=False, help="Returns an exit code of 0 for all successful runs and an exit code of 1 for fatal errors.")
 @config_from_file(
     dict_synonyms='',
     paths_to_exclude='',
@@ -128,7 +125,7 @@ def version():
 def run(argument, paths_to_mutate, disable_mutation_types, enable_mutation_types, runner,
         tests_dir, test_time_multiplier, test_time_base, swallow_output, use_coverage,
         dict_synonyms, pre_mutation, post_mutation, use_patch_file, paths_to_exclude,
-        simple_output, no_progress, rerun_all):
+        simple_output, no_progress, ci, rerun_all):
     """
     Runs mutmut. You probably want to start with just trying this. If you supply a mutation ID mutmut will check just this mutant.
     """
@@ -140,7 +137,7 @@ def run(argument, paths_to_mutate, disable_mutation_types, enable_mutation_types
     sys.exit(do_run(argument, paths_to_mutate, disable_mutation_types, enable_mutation_types, runner,
                     tests_dir, test_time_multiplier, test_time_base, swallow_output, use_coverage,
                     dict_synonyms, pre_mutation, post_mutation, use_patch_file, paths_to_exclude,
-                    simple_output, no_progress, rerun_all))
+                    simple_output, no_progress, ci, rerun_all))
 
 
 @climain.command(context_settings=dict(help_option_names=['-h', '--help']))
@@ -235,14 +232,30 @@ def html(dict_synonyms):
     sys.exit(0)
 
 
-def do_run(argument, paths_to_mutate, disable_mutation_types,
-           enable_mutation_types, runner, tests_dir, test_time_multiplier, test_time_base,
-           swallow_output, use_coverage, dict_synonyms, pre_mutation, post_mutation,
-           use_patch_file, paths_to_exclude, simple_output, no_progress, rerun_all):
+def do_run(
+    argument,
+    paths_to_mutate,
+    disable_mutation_types,
+    enable_mutation_types,
+    runner,
+    tests_dir,
+    test_time_multiplier,
+    test_time_base,
+    swallow_output,
+    use_coverage,
+    dict_synonyms,
+    pre_mutation,
+    post_mutation,
+    use_patch_file,
+    paths_to_exclude,
+    simple_output,
+    no_progress,
+    ci,
+    rerun_all,
+) -> int:
     """return exit code, after performing an mutation test run.
 
     :return: the exit code from executing the mutation tests
-    :rtype: int
     """
     if use_coverage and use_patch_file:
         raise click.BadArgumentUsage("You can't combine --use-coverage and --use-patch")
@@ -290,7 +303,12 @@ def do_run(argument, paths_to_mutate, disable_mutation_types,
         )
 
     tests_dirs = []
-    for p in split_paths(tests_dir):
+    test_paths = split_paths(tests_dir)
+    if test_paths is None:
+        raise FileNotFoundError(
+            'No test folders found in current folder. Run this where there is a "tests" or "test" folder.'
+        )
+    for p in test_paths:
         tests_dirs.extend(glob(p, recursive=True))
 
     for p in paths_to_mutate:
@@ -388,6 +406,7 @@ Legend for output:
         paths_to_mutate=paths_to_mutate,
         mutation_types_to_apply=mutation_types_to_apply,
         no_progress=no_progress,
+        ci=ci,
         rerun_all=rerun_all
     )
 
@@ -405,7 +424,7 @@ Legend for output:
         traceback.print_exc()
         return compute_exit_code(progress, e)
     else:
-        return compute_exit_code(progress)
+        return compute_exit_code(progress, ci=ci)
     finally:
         print()  # make sure we end the output with a newline
         # Close all active multiprocessing queues to avoid hanging up the main process
@@ -436,22 +455,22 @@ def parse_run_argument(argument, config, dict_synonyms, mutations_by_file, paths
         mutations_by_file[filename] = [mutation_id]
 
 
-def time_test_suite(swallow_output, test_command, using_testmon, current_hash_of_tests, no_progress):
+def time_test_suite(
+    swallow_output: bool,
+    test_command: str,
+    using_testmon: bool,
+    current_hash_of_tests,
+    no_progress,
+) -> float:
     """Execute a test suite specified by ``test_command`` and record
     the time it took to execute the test suite as a floating point number
 
     :param swallow_output: if :obj:`True` test stdout will be not be printed
-    :type swallow_output: bool
-
     :param test_command: command to spawn the testing subprocess
-    :type test_command: str
-
     :param using_testmon: if :obj:`True` the test return code evaluation will
         accommodate for ``pytest-testmon``
-    :type using_testmon: bool
 
     :return: execution time of the test suite
-    :rtype: float
     """
     cached_time = cached_test_time()
     if cached_time is not None and current_hash_of_tests == cached_hash_of_tests():
