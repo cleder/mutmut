@@ -80,6 +80,16 @@ DEFAULT_RUNNER = 'python -m pytest -x --assert=plain'
 def climain():
     """
     Mutation testing system for Python.
+
+    Getting started:
+
+    To run with pytest in test or tests folder: mutmut run
+
+    For more options: mutmut run --help
+
+    To show the results: mutmut results
+
+    To generate HTML report: mutmut html
     """
     pass
 
@@ -128,6 +138,29 @@ def run(argument, paths_to_mutate, disable_mutation_types, enable_mutation_types
         simple_output, no_progress, ci, rerun_all):
     """
     Runs mutmut. You probably want to start with just trying this. If you supply a mutation ID mutmut will check just this mutant.
+
+    Runs pytest by default (or unittest if pytest is unavailable) on tests in the “tests” or “test” folder.
+
+    It is recommended to configure any non-default options needed in setup.cfg or pyproject.toml, as described in the documentation.
+
+    Exit codes:
+
+     * 0 - all mutants were killed
+
+    Otherwise any or sum of any of the following exit codes:
+
+     * 1 - if a fatal error occurred
+
+     * 2 - if one or more mutants survived
+
+     * 4 - if one or more mutants timed out
+
+     * 8 - if one or more mutants caused tests to take twice as long
+
+    (This is equivalent to a bit-OR combination of the exit codes that may apply.)
+
+    With --CI flag enabled, the exit code will always be
+    1 for a fatal error or 0 for any other case.
     """
     if test_time_base is None:  # click sets the default=0.0 to None
         test_time_base = 0.0
@@ -221,14 +254,16 @@ def junitxml(dict_synonyms, suspicious_policy, untested_policy):
 
 @climain.command(context_settings=dict(help_option_names=['-h', '--help']))
 @click.option('--dict-synonyms')
+@click.option('-d', '--directory', help='Write the output files to DIR.')
 @config_from_file(
     dict_synonyms='',
+    directory='html',
 )
-def html(dict_synonyms):
+def html(dict_synonyms, directory):
     """
     Generate a HTML report of surviving mutants.
     """
-    create_html_report(dict_synonyms)
+    create_html_report(dict_synonyms, directory)
     sys.exit(0)
 
 
@@ -255,7 +290,7 @@ def do_run(
 ) -> int:
     """return exit code, after performing an mutation test run.
 
-    :return: the exit code from executing the mutation tests
+    :return: the exit code from executing the mutation tests for run command
     """
     if use_coverage and use_patch_file:
         raise click.BadArgumentUsage("You can't combine --use-coverage and --use-patch")
@@ -355,16 +390,16 @@ Legend for output:
         except ImportError:
             runner = 'python -m unittest'
 
+    if hasattr(mutmut_config, 'init'):
+        mutmut_config.init()
+        
     baseline_time_elapsed = time_test_suite(
         swallow_output=not swallow_output,
         test_command=runner,
         using_testmon=using_testmon,
         current_hash_of_tests=current_hash_of_tests,
         no_progress=no_progress,
-    )
-
-    if hasattr(mutmut_config, 'init'):
-        mutmut_config.init()
+    )    
 
     if using_testmon:
         copy('.testmondata', '.testmondata-initial')

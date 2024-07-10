@@ -48,16 +48,24 @@ You can get started with a simple:
 
 This will by default run pytest (or unittest if pytest is unavailable)
 on tests in the "tests" or "test" folder and
-it will try to figure out where the code to mutate lies. Run
+it will try to figure out where the code to mutate lies.
+
+NOTE that mutmut will apply the mutations directly, one at a time;
+it is **highly** recommended to add all changes to source control
+before running.
+
+Enter
 
 .. code-block:: console
 
-    mutmut --help
+    mutmut run --help
 
 for the available flags, to use other runners, etc. The recommended way to use
-mutmut if the defaults aren't working for you is to add a block in ``setup.cfg``.
+mutmut if the defaults aren't working for you is to add a
+block in ``setup.cfg`` or ``project.toml``.
 Then when you come back to mutmut weeks later you don't have to figure out the
-flags again, just run ``mutmut run`` and it works. Like this:
+flags again, just run ``mutmut run`` and it works.
+Like this in ``setup.cfg``:
 
 .. code-block:: ini
 
@@ -67,6 +75,14 @@ flags again, just run ``mutmut run`` and it works. Like this:
     runner=python -m hammett -x
     tests_dir=tests/
     dict_synonyms=Struct, NamedStruct
+
+or like this in ``pyproject.toml``:
+
+.. code-block:: ini
+
+    [tool.mutmut]
+    paths_to_mutate="src"
+    runner="python -m hammett -x"
 
 To use multiple paths either in the ``paths_to_mutate`` or ``tests_dir`` option
 use a comma or colon separated list. For example:
@@ -86,11 +102,11 @@ grouped by file. You can now look at a specific mutant diff with ``mutmut show 3
 all mutants for a specific file with ``mutmut show path/to/file.py`` or all mutants
 with ``mutmut show all``.
 
-
 You can also write a mutant to disk with ``mutmut apply 3``. You should **REALLY**
 have the file you mutate under source code control and committed before you apply
 a mutant!
 
+To generate a HTML report for a web browser: ``mutmut html``
 
 Whitelisting
 ------------
@@ -199,6 +215,8 @@ Inversely, you can also only specify to only run specific mutations with ``--ena
 Note that ``--disable-mutation-types`` and ``--enable-mutation-types`` are exclusive and cannot
 be combined.
 
+Changes made to ``mutmut_config.py`` does not invalidate the cache.
+If you modify the configuration file, you will likely need to remove ``.mutmut-cache`` manually to ensure that the changes take effect.
 
 Selecting tests to run
 ----------------------

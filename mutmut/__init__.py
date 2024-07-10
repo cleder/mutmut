@@ -33,7 +33,7 @@ from typing import Callable, Dict, Iterator, List, Optional, Set, Tuple
 from parso import parse
 from parso.python.tree import Name, Number, Keyword, FStringStart, FStringEnd
 
-__version__ = '2.4.3'
+__version__ = '2.5.0'
 
 
 if os.getcwd() not in sys.path:
@@ -1220,7 +1220,7 @@ def read_patch_data(patch_file_path: str):
         diffs = whatthepatch.parse_patch(f.read())
 
     return {
-        diff.header.new_path: {change.new for change in diff.changes if change.old is None}
+        os.path.normpath(diff.header.new_path): {change.new for change in diff.changes if change.old is None}
         for diff in diffs if diff.changes
     }
 
@@ -1286,7 +1286,7 @@ def compute_exit_code(
 ) -> int:
     """Compute an exit code for mutmut mutation testing
 
-    The following exit codes are available for mutmut:
+    The following exit codes are available for mutmut (as documented for the CLI run command):
      * 0 if all mutants were killed (OK_KILLED)
      * 1 if a fatal error occurred
      * 2 if one or more mutants survived (BAD_SURVIVED)
